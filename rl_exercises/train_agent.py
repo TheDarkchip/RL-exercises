@@ -53,9 +53,11 @@ def train(cfg: DictConfig) -> float:
     """
     env = make_env(cfg.env_name)
     printr(cfg)
-    if cfg.agent == "sb3":
+    # Support both legacy `agent` and newer `agent_name` config keys.
+    agent_name = cfg.get("agent", cfg.get("agent_name", ""))
+    if agent_name == "sb3":
         return train_sb3(env, cfg)
-    elif cfg.agent == "random":
+    elif agent_name in {"random", "random_agent"}:
         agent = RandomAgent(env)
     else:
         # TODO: add your agent options here
@@ -135,21 +137,24 @@ def train_sb3(env: gym.Env, cfg: DictConfig) -> float:
     )
 
     # Train agent
-    model.learn(total_timesteps=cfg.total_timesteps)
+    total_timesteps = int(cfg.get("total_timesteps", cfg.training_steps))
+    model.learn(total_timesteps=total_timesteps)
 
     # Save agent
-    model.save(cfg.model_fn)
+    model_fn = cfg.get("model_fn", "model")
+    model.save(model_fn)
 
     # Evaluate
-    env = Monitor(gym.make(cfg.env_id), filename="eval")
+    eval_env_id = cfg.get("env_id", cfg.get("env_name"))
+    if eval_env_id is None:
+        raise ValueError("Config must define either `env_id` or `env_name`.")
+    env = Monitor(gym.make(eval_env_id), filename="eval")
     means = evaluate(env, model, episodes=cfg.n_eval_episodes, seed=cfg.seed)
     performance = np.mean(means)
     return performance
 
 
-def evaluate(
-    env: gym.Env, agent: AbstractAgent, episodes: int = 100, seed: int = 0
-) -> float:
+def evaluate(env: gym.Env, agent: Any, episodes: int = 100, seed: int = 0) -> float:
     """Evaluate a given Policy on an Environment.
 
     Parameters
@@ -174,7 +179,10 @@ def evaluate(
         done = False
         episode_steps = 0
         while not done:
-            action, _ = agent.predict_action(obs, info, evaluate=True)  # type: ignore[arg-type]
+            if hasattr(agent, "predict_action"):
+                action, _ = agent.predict_action(obs, info, evaluate=True)  # type: ignore[arg-type]
+            else:
+                action, _ = agent.predict(obs, deterministic=True)
             obs, reward, terminated, truncated, _ = env.step(action)
             episode_rewards[-1] += reward
             episode_steps += 1
@@ -191,7 +199,7 @@ def evaluate(
     return np.mean(episode_rewards)
 
 
-def make_env(env_name: str, env_kwargs: dict = {}) -> gym.Env:
+def make_env(env_name: str, env_kwargs: dict | None = None) -> gym.Env:
     """Make environment based on name and kwargs.
 
     Parameters
@@ -206,6 +214,9 @@ def make_env(env_name: str, env_kwargs: dict = {}) -> gym.Env:
     gym.Env
         Instantiated env
     """
+    if env_kwargs is None:
+        env_kwargs = {}
+
     if env_name == "MarsRover":
         env = MarsRover(**env_kwargs)
         # env = TimeLimit(env, max_episode_steps=env.horizon)
