@@ -1,0 +1,85 @@
+Level 3 observations: contextual MarsRover
+
+Setup
+- I built a contextual version of MarsRover (n_states=7, horizon=12, deterministic, gamma=0.95).
+- I picked two context features:
+    * goal_position: which cell has the reward. The optimal direction
+      depends on this, so a context-oblivious policy can't be optimal
+      everywhere.
+    * goal_reward: the magnitude of the reward. With gamma < 1 this scales
+      returns but doesn't change argmax, so the optimal policy is the same
+      regardless of it. I picked it on purpose as a "free" context feature
+      to see if hidden agents can still cope with it.
+- Three agents, all using value iteration:
+    * specialized: one VI per context, used as the "best you can do"
+      reference for the optimality gap.
+    * hidden: VI on the average MDP over the training contexts (this is
+      what round-robin looks like in expectation when the agent never
+      sees the context).
+    * visible: VI on the joint MDP over (state, context). For unseen
+      contexts at eval time I do nearest-neighbour lookup in normalised
+      feature space, since tabular VI doesn't generalise on its own.
+- Train / val / test splits roughly following Section 6.4:
+    * train: goal_position in {2,3,4} x goal_reward in {5,10}     (6 contexts)
+    * val:   {2,3,4} x {7.5}   -> interpolation in goal_reward only
+    * test:  {1,5}   x {15}    -> extrapolation in goal_position
+
+Results (mean episode return; specialised is the upper bound)
+                  train          val            test
+    specialized   45.0 (+/-15)   45.0 (+/-0)    90.0 (+/-0)
+    hidden        30.0 (+/-24)   30.0 (+/-21)    0.0
+    visible       45.0 (+/-15)   45.0 (+/-0)     0.0
+
+Hidden policy I got: [1, 1, 1, 1, 0, 0, 0] — basically "head for the middle".
+
+Observations
+- On train, visible matches specialised exactly. Hidden has a +15 gap per
+  episode. That fits Theorem 1 in the paper: there's no single
+  state-only policy that is optimal for all three goal_position values, so
+  hidden has to pick a compromise. It happens to oscillate around cells
+  3-4, which is fine when the goal sits there but gives 0 reward when
+  the goal is at cell 2.
+- On val, both hidden and visible behave the same as on train. This
+  matches what I expected: goal_reward doesn't change the optimal
+  policy, so the policies trained without seeing reward 7.5 still work.
+  Nearest-neighbour for visible also picks an in-distribution policy
+  with the same direction, so it ends up being optimal too.
+- On test, both fall to 0. Hidden never goes far enough left/right (it's
+  stuck around the training mean), and visible's nearest neighbour just
+  reuses the policy of gp=2 for gp=1 and gp=4 for gp=5, which oscillates
+  inside the training region instead of going to the new goal cell.
+
+Where it lines up with the paper
+- A measurable optimality gap shows up even on a 7-state MDP (Section 6.2).
+- Visible context closes the gap on in-distribution data (Section 6.3).
+- Out-of-distribution contexts break both agents (Section 6.4).
+
+Where it differs
+- The paper sometimes sees concat (visible) actually do worse than hidden
+  on some slices. I don't see that here. I think it's because tabular VI
+  is exact: there's no representation-learning noise, no sample
+  inefficiency, no variance to be smoothed by an extra input. As soon as
+  the visible agent is told the context, it's at the optimum.
+- The paper uses SAC / C51 with neural nets that interpolate context
+  smoothly. My nearest-neighbour shortcut is much cruder, which is
+  probably why test performance is exactly 0 instead of "degraded but
+  non-zero" like in the paper.
+
+What I tried that didn't help
+- I tried widening the test split (e.g. goal_reward=15 only, with
+  goal_position in train) and there visible still matches specialised
+  because reward magnitude doesn't matter. So the failure on test is
+  really driven by goal_position being out of distribution, not by the
+  reward magnitude.
+- I considered training the hidden agent with a different RNG seed for
+  tie-breaking. That changes which side it picks at the centre cell but
+  doesn't really change the gap (it just relocates which goal_position
+  it gets 0 reward on).
+
+Conclusion
+- The basic story from the paper shows up cleanly: context matters
+  exactly when it changes the optimal policy, ignoring it leaves a real
+  optimality gap, and going outside the training context distribution
+  is hard for both kinds of agent. Tabular VI makes the picture sharper
+  but loses the smoother generalisation neural agents can have.
+- Reproducible via: python rl_exercises/week_2/contextual_experiment.py
