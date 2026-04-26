@@ -61,6 +61,9 @@ def train(cfg: DictConfig) -> float:
         return train_sb3(env, cfg)
     elif agent_name in {"random", "random_agent"}:
         agent = RandomAgent(env)
+    elif agent_name in {"policy_iteration", "value_iteration"}:
+        agent_cls = eval(cfg.agent_class)
+        agent = agent_cls(env=env, seed=cfg.seed, **cfg.agent_kwargs)
     else:
         # TODO: add your agent options here
         raise NotImplementedError

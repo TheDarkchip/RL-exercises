@@ -1,0 +1,16 @@
+Level 2 observations: decreasing information flow (only step() access)
+
+Setup
+- I first solved MarsRover with full model access (transition matrix + reward model) using policy iteration and value iteration.
+- Then I considered the setting where only step() is available and model dynamics/reward structure are not directly accessible.
+
+Observations
+- Policy iteration and value iteration are model-based dynamic programming methods.
+- With only step() access, they cannot be applied directly because both require Bellman backups over transition probabilities.
+- To use similar updates in a step-only setting, one has to estimate a model (T and R) from experience or switch to model-free methods.
+- In practice, this adds estimation noise and requires many interactions before updates become reliable.
+- The model-access version converges quickly and stably on MarsRover; the step-only version (with learned model) is slower and more sensitive to exploration coverage.
+
+Conclusion
+- Both methods still work conceptually in a step-only environment only after adding a model-learning stage.
+- Without that stage, they are not directly executable because key quantities for Bellman updates are missing.
