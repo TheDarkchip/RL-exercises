@@ -1,0 +1,29 @@
+Level 1 observations
+
+I ran the actor-critic baselines with the quick experiment profile from run_experiments.py. This used two seeds, 4000 environment steps, evaluations every 1000 steps, and two evaluation episodes per checkpoint. This is enough to see whether the implementations behave differently, but it is still a short run, so I would not treat the exact ranking as a final benchmark.
+
+Plots and data:
+- results/l1/cartpole_v1_actor_critic_baselines.png
+- results/l1/cartpole_v1_actor_critic_baselines.csv
+- results/l1/lunarlander_v3_actor_critic_baselines.png
+- results/l1/lunarlander_v3_actor_critic_baselines.csv
+
+On CartPole-v1, the learned value baseline had the best final average return in this short run. At 4000 steps the final two-seed averages were roughly:
+- no baseline: 22.25
+- running average: 22.25
+- value baseline: 35.50
+- GAE: 22.25
+
+The CartPole result is noisy because the run is short and only uses two seeds. Still, it fits the basic idea that a state-dependent value baseline can reduce variance more than a constant baseline. The other three baselines ended very close together here, so I would not claim a strong difference between none, avg, and GAE from this run.
+
+One plotting detail is that ac_none is hard to see because it lies exactly under ac_avg in these quick-run curves. This is not a plotting bug. In the implementation, the avg baseline subtracts a single scalar running return, but the advantages are then normalized by subtracting their own mean and dividing by their standard deviation. Subtracting a constant before this normalization does not change the normalized advantages, so ac_none and ac_avg can produce the same policy update and identical plotted returns in short runs.
+
+On LunarLander-v3, the value and GAE baselines looked better than no baseline and running average. The final two-seed averages were roughly:
+- no baseline: -466.66
+- running average: -466.66
+- value baseline: -330.80
+- GAE: -334.94
+
+This makes more conceptual sense to me than the CartPole result. LunarLander has more variable rewards, so subtracting a state-dependent baseline should matter more. The running-average baseline only removes a global reward level and cannot tell whether a specific state is promising, so it did not help much here. GAE and the value baseline both use the critic, so they reduced the variance of the policy update more effectively.
+
+My main conclusion is that learned baselines are more useful as the task becomes harder. In theory, no baseline is unbiased but high variance, the running-average baseline is a weak variance reduction trick, and value/GAE baselines are stronger because they estimate how good the current state is. GAE should often be the best default because lambda controls the bias-variance trade-off, although in this short run it was about tied with the value baseline on LunarLander.

@@ -9,8 +9,10 @@ from typing import Any, List, Tuple
 import gymnasium as gym
 import numpy as np
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
-from torch.distributions import Categorical
+from torch.distributions import Categorical, Normal
 
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = True
@@ -40,6 +42,72 @@ def set_seed(env: gym.Env, seed: int = 0) -> None:
     torch.cuda.manual_seed(seed)
 
 
+class ContinuousPolicy(nn.Module):
+    log_std_min = -20.0
+    log_std_max = 2.0
+
+    def __init__(
+        self,
+        state_space: gym.spaces.Box,
+        action_space: gym.spaces.Box,
+        hidden_size: int = 128,
+    ) -> None:
+        super().__init__()
+        self.state_dim = int(np.prod(state_space.shape))
+        action_dim = int(np.prod(action_space.shape))
+        self.fc1 = nn.Linear(self.state_dim, hidden_size)
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
+        self.mean = nn.Linear(hidden_size, action_dim)
+        self.log_std = nn.Linear(hidden_size, action_dim)
+        self.register_buffer(
+            "action_scale",
+            torch.as_tensor((action_space.high - action_space.low) / 2.0).float(),
+        )
+        self.register_buffer(
+            "action_bias",
+            torch.as_tensor((action_space.high + action_space.low) / 2.0).float(),
+        )
+
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        if x.dim() == 1:
+            x = x.unsqueeze(0)
+        x = x.view(x.size(0), -1)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        return self.mean(x), self.log_std(x).clamp(self.log_std_min, self.log_std_max)
+
+    def sample(
+        self, x: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        mean, log_std = self(x)
+        normal = Normal(mean, log_std.exp())
+        z = normal.rsample()
+        squashed = torch.tanh(z)
+        action = squashed * self.action_scale + self.action_bias
+        log_prob = normal.log_prob(z) - torch.log(
+            self.action_scale * (1.0 - squashed.pow(2)) + 1e-6
+        )
+        return action, log_prob.sum(dim=-1), normal.entropy().sum(dim=-1)
+
+    def log_prob_entropy(
+        self, x: torch.Tensor, action: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        mean, log_std = self(x)
+        squashed = ((action - self.action_bias) / self.action_scale).clamp(
+            -1.0 + 1e-6, 1.0 - 1e-6
+        )
+        z = torch.atanh(squashed)
+        normal = Normal(mean, log_std.exp())
+        log_prob = normal.log_prob(z) - torch.log(
+            self.action_scale * (1.0 - squashed.pow(2)) + 1e-6
+        )
+        return log_prob.sum(dim=-1), normal.entropy().sum(dim=-1)
+
+    def deterministic(self, x: torch.Tensor) -> torch.Tensor:
+        mean, _ = self(x)
+        return torch.tanh(mean) * self.action_scale + self.action_bias
+
+
 class PPOAgent(AbstractAgent):
     def __init__(
         self,
@@ -53,6 +121,8 @@ class PPOAgent(AbstractAgent):
         batch_size: int = 64,
         ent_coef: float = 0.01,
         vf_coef: float = 0.5,
+        anneal_lr: bool = True,
+        clip_vloss: bool = True,
         seed: int = 0,
         hidden_size: int = 128,
     ) -> None:
@@ -66,9 +136,18 @@ class PPOAgent(AbstractAgent):
         self.batch_size = batch_size
         self.ent_coef = ent_coef
         self.vf_coef = vf_coef
+        self.anneal_lr = anneal_lr
+        self.clip_vloss = clip_vloss
 
-        # networks
-        self.policy = Policy(env.observation_space, env.action_space, hidden_size)
+        self.is_discrete = isinstance(env.action_space, gym.spaces.Discrete)
+        if self.is_discrete:
+            self.policy = Policy(env.observation_space, env.action_space, hidden_size)
+        elif isinstance(env.action_space, gym.spaces.Box):
+            self.policy = ContinuousPolicy(
+                env.observation_space, env.action_space, hidden_size
+            )
+        else:
+            raise TypeError("PPOAgent supports Discrete and Box action spaces.")
         self.value_fn = ValueNetwork(env.observation_space, hidden_size)
 
         # combined optimizer with separate lr for actor and critic
@@ -78,18 +157,36 @@ class PPOAgent(AbstractAgent):
                 {"params": self.value_fn.parameters(), "lr": lr_critic},
             ]
         )
+        self.initial_lrs = [lr_actor, lr_critic]
 
     def predict(
-        self, state: np.ndarray
-    ) -> Tuple[int, torch.Tensor, torch.Tensor, torch.Tensor]:
+        self, state: np.ndarray, evaluate: bool = False
+    ) -> Tuple[int | np.ndarray, torch.Tensor, torch.Tensor, torch.Tensor]:
         t = torch.from_numpy(state).float()
-        probs = self.policy(t).squeeze(0)
-        dist = Categorical(probs)
-        action = dist.sample().item()
+        if self.is_discrete:
+            probs = self.policy(t).squeeze(0)
+            dist = Categorical(probs)
+            if evaluate:
+                action = int(torch.argmax(probs).item())
+            else:
+                action = dist.sample().item()
+            return (
+                action,
+                dist.log_prob(torch.tensor(action)),
+                dist.entropy(),
+                self.value_fn(t),
+            )
+
+        if evaluate:
+            action_t = self.policy.deterministic(t).squeeze(0)
+            logp_t, entropy_t = self.policy.log_prob_entropy(t, action_t.unsqueeze(0))
+        else:
+            action_t, logp_t, entropy_t = self.policy.sample(t)
+            action_t = action_t.squeeze(0)
         return (
-            action,
-            dist.log_prob(torch.tensor(action)),
-            dist.entropy(),
+            action_t.detach().cpu().numpy(),
+            logp_t.squeeze(0),
+            entropy_t.squeeze(0),
             self.value_fn(t),
         )
 
@@ -97,55 +194,97 @@ class PPOAgent(AbstractAgent):
         self,
         rewards: List[float],
         values: torch.Tensor,
-        next_values: torch.Tensor,  # noqa: F841
+        next_values: torch.Tensor,
         dones: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        # TODO: compute advantages using GAE (Hint: replicate the GAE formula from actor critic)
-        return None  # template placeholder
+        reward_t = torch.as_tensor(rewards, dtype=torch.float32)
+        values = values.detach().flatten()
+        next_values = next_values.detach().flatten()
+        dones = dones.detach().float().flatten()
 
-    def update(self, trajectory: List[Any]) -> None:
+        advantages = torch.zeros_like(reward_t)
+        gae = 0.0
+        for t in range(len(rewards) - 1, -1, -1):
+            not_done = 1.0 - dones[t]
+            delta = reward_t[t] + self.gamma * next_values[t] * not_done - values[t]
+            gae = delta + self.gamma * self.gae_lambda * not_done * gae
+            advantages[t] = gae
+
+        returns = advantages + values
+        advantages = (advantages - advantages.mean()) / (
+            advantages.std(unbiased=False) + 1e-8
+        )
+        return advantages.detach(), returns.detach()
+
+    def update(
+        self, trajectory: List[Any], progress_remaining: float = 1.0
+    ) -> Tuple[float, float, float]:
+        if self.anneal_lr:
+            # Enhancement 1 from PPO implementation details: linearly anneal both
+            # learning rates so late updates make smaller policy/value changes.
+            for group, initial_lr in zip(self.optimizer.param_groups, self.initial_lrs):
+                group["lr"] = initial_lr * progress_remaining
+
         # unpack trajectory
         states = torch.stack([torch.from_numpy(t[0]).float() for t in trajectory])
-        actions = torch.tensor([t[1] for t in trajectory])
+        if self.is_discrete:
+            actions = torch.tensor([t[1] for t in trajectory])
+        else:
+            actions = torch.as_tensor(np.array([t[1] for t in trajectory])).float()
         old_logps = torch.stack([t[2] for t in trajectory]).detach()
-        entropies = torch.stack([t[3] for t in trajectory]).detach()  # noqa: F841
         rewards = [t[4] for t in trajectory]
         dones = torch.tensor([t[5] for t in trajectory], dtype=torch.float32)
+        next_states = torch.stack([torch.from_numpy(t[6]).float() for t in trajectory])
 
-        # TODO: compute values and next_values without gradients
-        values = ...  # noqa: F841  # template placeholder
-        next_values = ...  # noqa: F841  # template placeholder
-
-        # TODO: compute advantages and returns
-        advantages = ...  # template placeholder
-        returns = ...  # template placeholder
-
+        with torch.no_grad():
+            values = self.value_fn(states)
+            next_values = self.value_fn(next_states)
         advantages, returns = self.compute_gae(rewards, values, next_values, dones)
 
         dataset = torch.utils.data.TensorDataset(
-            states, actions, old_logps, advantages, returns
+            states, actions, old_logps, advantages, returns, values.detach()
         )
         loader = torch.utils.data.DataLoader(
             dataset, batch_size=self.batch_size, shuffle=True
         )
 
         for _ in range(self.epochs):
-            for b_states, b_actions, b_oldlogp, b_adv, b_ret in loader:
-                # TODO: compute policy loss, value loss, and entropy loss
+            for b_states, b_actions, b_oldlogp, b_adv, b_ret, b_old_val in loader:
+                if self.is_discrete:
+                    dist = Categorical(self.policy(b_states))
+                    new_logp = dist.log_prob(b_actions)
+                    entropy = dist.entropy()
+                else:
+                    new_logp, entropy = self.policy.log_prob_entropy(
+                        b_states, b_actions
+                    )
+                ratio = (new_logp - b_oldlogp).exp()
 
-                # TODO: compute new log probabilities by sampling actions from the policy distribution
-                new_logp = ...  # noqa: F841  # template placeholder
+                unclipped_objective = ratio * b_adv
+                clipped_objective = (
+                    torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * b_adv
+                )
+                policy_loss = -torch.min(unclipped_objective, clipped_objective).mean()
 
-                # TODO: compute the ratio of new log probabilities to old log probabilities
+                values_pred = self.value_fn(b_states)
+                if self.clip_vloss:
+                    # Enhancement 2 from PPO2: clip value updates around old
+                    # predictions for fidelity to PPO2. The blog notes mixed
+                    # evidence for performance, so this stays configurable.
+                    values_clipped = b_old_val + torch.clamp(
+                        values_pred - b_old_val, -self.clip_eps, self.clip_eps
+                    )
+                    value_loss = (
+                        0.5
+                        * torch.max(
+                            F.mse_loss(values_pred, b_ret, reduction="none"),
+                            F.mse_loss(values_clipped, b_ret, reduction="none"),
+                        ).mean()
+                    )
+                else:
+                    value_loss = 0.5 * F.mse_loss(values_pred, b_ret)
 
-                # TODO: compute the clipped surrogate loss using the clipped objective
-                policy_loss = ...  # template placeholder
-
-                # TODO: compute value loss using mean squared error
-                value_loss = ...  # template placeholder
-
-                # TODO: compute entropy loss using the distribution's entropy
-                entropy_loss = ...  # template placeholder
+                entropy_loss = -entropy.mean()
 
                 loss = (
                     policy_loss
@@ -188,7 +327,10 @@ class PPOAgent(AbstractAgent):
                     )
 
             # PPO update
-            policy_loss, value_loss, entropy_loss = self.update(trajectory)
+            progress_remaining = max(0.0, 1.0 - step_count / float(total_steps))
+            policy_loss, value_loss, entropy_loss = self.update(
+                trajectory, progress_remaining
+            )
             total_return = sum(t[4] for t in trajectory)
             print(
                 f"[Train] Step {step_count:6d} Return {total_return:5.1f} Policy Loss {policy_loss:.3f} Value Loss {value_loss:.3f} Entropy Loss {entropy_loss:.3f}"
@@ -205,7 +347,7 @@ class PPOAgent(AbstractAgent):
             done = False
             total_r = 0.0
             while not done:
-                action, _, _, _ = self.predict(state)
+                action, _, _, _ = self.predict(state, evaluate=True)
                 state, r, term, trunc, _ = eval_env.step(action)
                 done = term or trunc
                 total_r += r
@@ -228,6 +370,8 @@ def main(cfg: DictConfig) -> None:
         batch_size=cfg.agent.batch_size,
         ent_coef=cfg.agent.ent_coef,
         vf_coef=cfg.agent.vf_coef,
+        anneal_lr=cfg.agent.get("anneal_lr", True),
+        clip_vloss=cfg.agent.get("clip_vloss", True),
         seed=cfg.seed,
         hidden_size=cfg.agent.hidden_size,
     )

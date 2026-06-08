@@ -1,0 +1,19 @@
+Level 3 observations
+
+I read the SAC paper by Haarnoja et al. and implemented a compact continuous-action SAC agent. I also extended PPO to support continuous Box action spaces, so SAC can be compared to PPO on the same environment. For the quick experiment I used Pendulum-v1 because it is continuous-action and fast enough to run locally.
+
+Plots and data:
+- results/l3/pendulum_ppo_sac_comparison.png
+- results/l3/pendulum_ppo_sac_comparison.csv
+
+The quick run used two seeds, 4000 environment steps, evaluations every 1000 steps, and two evaluation episodes per checkpoint. The final two-seed averages were roughly:
+- continuous PPO: -1155.73
+- SAC: -953.21
+
+SAC started slightly worse, but improved faster after the replay buffer had enough data, and it ended better than PPO in this short run. This matches the main claim from the SAC paper that off-policy learning can be more sample efficient, because SAC keeps old transitions in a replay buffer instead of discarding them after one policy update.
+
+The other important paper idea is maximum-entropy learning. SAC does not only maximize reward; it also encourages a stochastic policy with high entropy. My understanding is that this prevents the agent from becoming too deterministic too early and helps exploration. The paper also claims this improves stability across seeds. I cannot strongly verify the stability claim with only two seeds, but the learning curve did improve consistently enough to make the claim plausible.
+
+I also implemented twin Q-functions and used the minimum Q-value in the target and policy update. This follows the paper's explanation that two critics help reduce positive Q-value bias. The implementation uses soft target updates with tau as well, which should make critic targets less jumpy.
+
+The biggest limitation is that my SAC uses a fixed alpha. The paper discusses the entropy temperature/reward scale as important, and modern SAC implementations often tune alpha automatically. So this implementation verifies the main differences from PPO, especially replay-buffer off-policy learning and entropy regularization, but it is not as tuned as a production SAC implementation.

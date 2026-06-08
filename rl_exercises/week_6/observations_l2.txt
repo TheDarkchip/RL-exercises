@@ -1,0 +1,18 @@
+Level 2 observations
+
+I implemented PPO with the clipped surrogate objective, value loss, entropy bonus, and minibatch training over multiple epochs. I also read the PPO implementation-details blog and added two PPO2 details: learning-rate annealing and value-function loss clipping.
+
+The blog changed how I think about PPO. PPO is not only the clipped policy objective. The practical algorithm also depends on details like GAE, minibatches, advantage normalization, entropy, optimizer settings, and schedules. I chose learning-rate annealing because the blog lists it as a core detail and reports evidence that it can help. I chose value-function clipping because it is part of PPO2, but the blog is more skeptical about it: it says later studies found no clear benefit and possibly even harm. For that reason I kept it configurable with agent.clip_vloss.
+
+Plots and data:
+- results/l2/lunarlander_ppo_comparison.png
+- results/l2/lunarlander_ppo_comparison.csv
+
+I ran the quick experiment profile on LunarLander-v3 with two seeds, 4000 environment steps, evaluations every 1000 steps, and two evaluation episodes per checkpoint. The final two-seed averages were roughly:
+- actor-critic with GAE: -334.94
+- vanilla PPO: -472.86
+- PPO with learning-rate annealing and value clipping: -239.69
+
+In this short run, enhanced PPO looked best. Vanilla PPO actually got worse by the last checkpoint, while the enhanced version stayed higher. My interpretation is that the learning-rate schedule probably helped by making later updates less aggressive. I am less confident about the value clipping part, because the blog says its empirical value is questionable. Since both enhancements were enabled together, this run does not isolate which one mattered.
+
+Compared with actor-critic, PPO has a practical advantage because it can reuse the collected trajectory for several minibatch epochs while the clipped ratio prevents the policy from moving too far. In this run that seemed to help the enhanced PPO variant. However, because this was only 4000 steps and two seeds, I would describe the result as evidence that the implementation works and produces reasonable curves, not as a definitive performance comparison.

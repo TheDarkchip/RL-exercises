@@ -38,7 +38,7 @@ class ActorCriticAgent(AbstractAgent):
         lr_actor: float = 5e-4,
         lr_critic: float = 1e-3,
         gamma: float = 0.99,
-        gae_lambda: float = 0.95,  # FIXME: lambda for GAE
+        gae_lambda: float = 0.95,
         seed: int = 0,
         hidden_size: int = 128,
         baseline_type: str = "value",  # 'none', 'avg', 'value', or 'gae'
@@ -86,16 +86,14 @@ class ActorCriticAgent(AbstractAgent):
     def compute_advantages(
         self, states: List[np.ndarray], rewards: List[float]
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        # TODO: convert rewards into discounted returns
-
-        # TODO: convert states list into a torch batch and compute state-values
-
-        # TODO: compute raw advantages = returns - values
-
-        # TODO: normalize advantages to zero mean and unit variance and use 1e-8 for numerical stability
-
-        # return normalized advantages and returns
-        return None  # template placeholder
+        returns = self.compute_returns(rewards)
+        state_batch = torch.as_tensor(np.array(states), dtype=torch.float32)
+        values = self.value_fn(state_batch).detach()
+        advantages = returns - values
+        advantages = (advantages - advantages.mean()) / (
+            advantages.std(unbiased=False) + 1e-8
+        )
+        return advantages.detach(), returns.detach()
 
     def compute_gae(
         self,
@@ -104,19 +102,27 @@ class ActorCriticAgent(AbstractAgent):
         next_states: List[np.ndarray],
         dones: List[bool],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        # TODO: compute values and next_values using your value_fn
+        state_batch = torch.as_tensor(np.array(states), dtype=torch.float32)
+        next_state_batch = torch.as_tensor(np.array(next_states), dtype=torch.float32)
+        reward_t = torch.as_tensor(rewards, dtype=torch.float32)
+        done_t = torch.as_tensor(dones, dtype=torch.float32)
 
-        # TODO: compute deltas: one-step TD errors
+        with torch.no_grad():
+            values = self.value_fn(state_batch)
+            next_values = self.value_fn(next_state_batch)
+            deltas = reward_t + self.gamma * next_values * (1.0 - done_t) - values
 
-        # TODO: accumulate GAE advantages backwards
+            advantages = torch.zeros_like(reward_t)
+            gae = 0.0
+            for t in range(len(rewards) - 1, -1, -1):
+                gae = deltas[t] + self.gamma * self.gae_lambda * (1.0 - done_t[t]) * gae
+                advantages[t] = gae
 
-        # TODO: compute returns using advantages and values
-
-        # TODO: normalize advantages to zero mean and unit variance and use 1e-8 for numerical stability
-
-        # TODO: advantages, returns  # replace with actual values (detach both to avoid re-entering the graph)
-
-        return None  # template placeholder
+            returns = advantages + values
+            advantages = (advantages - advantages.mean()) / (
+                advantages.std(unbiased=False) + 1e-8
+            )
+        return advantages.detach(), returns.detach()
 
     def update_agent(
         self,
@@ -133,15 +139,11 @@ class ActorCriticAgent(AbstractAgent):
             adv, ret = self.compute_advantages(list(states), list(rewards))
         elif self.baseline_type == "avg":
             ret = self.compute_returns(list(rewards))
-
-            # TODO: compute advantages by subtracting running return
-            adv = ...  # template placeholder
-
-            # TODO: normalize advantages to zero mean and unit variance and use 1e-8 for numerical stability
-            # (Reminder, use unbiased=False for torch tensors)
-
-            # TODO: update running return using baseline decay
-            # (x = baseline_decay * x + (1 - baseline_decay) * mean return)
+            adv = ret - self.running_return
+            adv = (adv - adv.mean()) / (adv.std(unbiased=False) + 1e-8)
+            self.running_return = self.baseline_decay * self.running_return + (
+                1.0 - self.baseline_decay
+            ) * float(ret.mean().item())
         else:
             ret = self.compute_returns(list(rewards))
             adv = (ret - ret.mean()) / (ret.std(unbiased=False) + 1e-8)
@@ -240,7 +242,7 @@ def main(cfg: DictConfig) -> None:
         lr_actor=cfg.agent.lr_actor,
         lr_critic=cfg.agent.lr_critic,
         gamma=cfg.agent.gamma,
-        gae_lambda=cfg.agent.get("gae_lambda", 0.95),  # FIXME
+        gae_lambda=cfg.agent.get("gae_lambda", 0.95),
         seed=cfg.seed,
         hidden_size=cfg.agent.hidden_size,
         baseline_type=cfg.agent.baseline_type,
