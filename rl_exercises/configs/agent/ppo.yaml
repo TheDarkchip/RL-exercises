@@ -25,6 +25,8 @@ agent:
   # Regularization coefficients
   ent_coef: 0.01     # entropy bonus weight
   vf_coef: 0.5       # value-loss weight
+  anneal_lr: true    # enhancement: linearly decay actor/critic learning rates
+  clip_vloss: true   # enhancement: clip value-function updates
 
   # Network size
   hidden_size: 128

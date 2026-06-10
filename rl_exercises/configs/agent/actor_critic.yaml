@@ -1,0 +1,18 @@
+env:
+  name: LunarLander-v3
+
+seed: 0
+
+agent:
+  lr_actor: 5e-3
+  lr_critic: 1e-2
+  gamma: 0.99
+  gae_lambda: 0.95
+  hidden_size: 128
+  baseline_type: value
+  baseline_decay: 0.9
+
+train:
+  total_steps: 200000
+  eval_interval: 10000
+  eval_episodes: 5

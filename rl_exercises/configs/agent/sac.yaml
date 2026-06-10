@@ -1,0 +1,22 @@
+# configs/agent/sac.yaml
+
+env:
+  name: Pendulum-v1
+
+seed: 0
+
+agent:
+  lr: 3e-4
+  gamma: 0.99
+  tau: 0.005
+  alpha: 0.2
+  batch_size: 256
+  buffer_size: 1000000
+  hidden_size: 256
+  learning_starts: 1000
+  updates_per_step: 1
+
+train:
+  total_steps: 20000
+  eval_interval: 5000
+  eval_episodes: 5
