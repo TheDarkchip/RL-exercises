@@ -1,0 +1,14 @@
+Level 3 observations: ensemble exploration compared to RND
+
+The ensemble method produced a different exploration pressure from RND. RND
+rewards states whose random-network embedding is still hard to predict, while
+the ensemble method explores where the Q-value heads disagree. So RND is mainly
+state-novelty driven, and the ensemble method is more decision-uncertainty
+driven.
+
+In the short LunarLander-v3 comparison, EDE-DQN did worse than RND-DQN by final
+IQM, although it improved faster in the middle of the run. I would not treat
+that as a strong performance claim because the run is small and high-variance.
+The qualitative effect is still different from RND: the ensemble bonus is tied
+to uncertainty about action values, so it explores where the value heads
+disagree rather than where a random target embedding is hard to predict.

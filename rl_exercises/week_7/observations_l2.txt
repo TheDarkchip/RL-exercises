@@ -1,0 +1,16 @@
+Level 2 observations: NovelD behavior snapshots
+
+I used lander x position versus lander y position as the behavior snapshot.
+This shows which parts of the LunarLander-v3 state space the policy visits at
+early, middle, and late points in training.
+
+The later NovelD snapshot shows trajectories on both sides of the landing zone
+instead of staying on one narrow path. That is what I expected from a reward
+that only pays for moving into a state that is more novel than the previous one.
+
+The main thing I learned is that behavior snapshots are more informative than a
+reward curve for exploration. If the visited-state cloud spreads out but return
+does not improve, then the exploration bonus is working mechanically, but it is
+not helping the task. On LunarLander this diagnostic is more useful, because
+the agent can fail by repeatedly exploring unsafe arcs instead of learning to
+settle near the pad.

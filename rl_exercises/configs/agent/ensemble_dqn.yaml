@@ -1,0 +1,28 @@
+# configs/agent/ensemble_dqn.yaml
+# Hydra configuration for EDEDQNAgent training.
+
+env:
+  name: LunarLander-v3
+
+seed: 0
+
+agent:
+  buffer_capacity: 10000
+  batch_size: 64
+  learning_rate: 0.00025
+  gamma: 0.99
+  epsilon_start: 1.0
+  epsilon_final: 0.05
+  epsilon_decay: 5000
+  target_update_freq: 1000
+
+ede:
+  hidden_dim: 128
+  n_members: 3
+  n_quantiles: 51
+  ucb_coef: 1.0
+  huber_kappa: 1.0
+
+train:
+  num_frames: 20000
+  eval_interval: 1000

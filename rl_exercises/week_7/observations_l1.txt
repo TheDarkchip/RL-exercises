@@ -1,0 +1,18 @@
+Level 1 observations: RND
+
+In the short LunarLander-v3 comparison, RND-DQN ended slightly better than the
+epsilon-greedy DQN baseline by final IQM. The run is still very short and noisy,
+but LunarLander is a good test because useful behavior depends more on
+discovering different landing trajectories and recovery states.
+
+RND seems like a better fit for PPO than for DQN in this setup. PPO collects
+fresh trajectories, so the novelty bonus describes the current policy's visits.
+DQN stores the bonus in replay, so old transitions can keep old novelty values
+even after the predictor has learned those states. That makes the intrinsic
+reward less clean for off-policy learning.
+
+The behavior snapshots support this intuition. RND visits different parts of
+the lander position space over training, and the return improves late in the
+short run. My conclusion is that RND is more useful here than on a dense-control
+sanity check, but it still needs careful reward scaling because too much
+intrinsic reward can distract from learning a stable landing policy.
